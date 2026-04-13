@@ -80,6 +80,29 @@ body {
   display: block;
 }
 
+.stage-controls {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 3;
+}
+
+.shot-toggle {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+
+.shot-toggle:hover {
+  background: rgba(255, 255, 255, 0.96);
+}
+
 .chat-panel {
   display: flex;
   flex-direction: column;

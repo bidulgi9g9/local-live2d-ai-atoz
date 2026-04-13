@@ -8,6 +8,69 @@
 			"huohuo.8192/texture_02.png",
 			"huohuo.8192/texture_03.png"
 		],
+		"Expressions": [
+			{
+				"Name": "angry",
+				"File": "angry.exp3.json"
+			},
+			{
+				"Name": "baozhen",
+				"File": "baozhen.exp3.json"
+			},
+			{
+				"Name": "cry",
+				"File": "cry.exp3.json"
+			},
+			{
+				"Name": "white eyes",
+				"File": "white eyes.exp3.json"
+			},
+			{
+				"Name": "qizi1",
+				"File": "qizi1.exp3.json"
+			},
+			{
+				"Name": "qizi2",
+				"File": "qizi2.exp3.json"
+			}
+		],
+		"Motions": {
+			"idle": [
+				{
+					"File": "Scene1.motion3.json"
+				}
+			],
+			"qizi": [
+				{
+					"File": "qizi.motion3.json"
+				}
+			],
+			"haoqi": [
+				{
+					"File": "haoqi.motion3.json"
+				}
+			],
+			"keshui": [
+				{
+					"File": "keshui.motion3.json"
+				}
+			],
+			"zhentou": [
+				{
+					"File": "zhentou.motion3.json"
+				}
+			],
+			"yaotou": [
+				{
+					"File": "yaotou.motion3.json"
+				}
+			],
+			"linghun": [
+				{
+					"File": "linghun.motion3.json"
+				}
+			]
+		},
 		"Physics": "huohuo.physics3.json",
 		"DisplayInfo": "huohuo.cdi3.json"
 	},

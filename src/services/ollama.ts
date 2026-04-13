@@ -3,6 +3,11 @@ export interface OllamaMessage {
   content: string;
 }
 
+interface OllamaRequestMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
 interface OllamaChatResponse {
   model: string;
   message?: {
@@ -14,6 +19,22 @@ interface OllamaChatResponse {
 
 export async function askOllama(chatHistory: OllamaMessage[]): Promise<string> {
   try {
+    const systemPrompt = [
+      'You are a Live2D chat assistant.',
+      'Every response MUST start with exactly one leading emotion tag from this list only:',
+      '(happy) (curious) (sad) (angry) (surprised) (neutral).',
+      'Format: (emotion) your reply text',
+      'Choose the most fitting emotion from context. Do not overuse (neutral).',
+      'Use (neutral) only when no clear emotional tone exists.',
+      'Do not use any other tag name.',
+      'Do not output more than one leading tag.'
+    ].join(' ');
+
+    const requestMessages: OllamaRequestMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...chatHistory,
+    ];
+
     // /api/chat uses a messages array and returns message.content
     const response = await fetch('http://localhost:11434/api/chat', {
       method: 'POST',
@@ -22,7 +43,7 @@ export async function askOllama(chatHistory: OllamaMessage[]): Promise<string> {
       },
       body: JSON.stringify({
         model: 'gemma4:e4b',
-        messages: chatHistory,
+        messages: requestMessages,
         stream: false,
       }),
     });
