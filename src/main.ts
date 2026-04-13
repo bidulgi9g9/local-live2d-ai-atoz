@@ -1,6 +1,11 @@
 import './style.css';
 import * as PIXI from 'pixi.js';
 import { Live2DModel } from 'pixi-live2d-display/cubism4';
+import { askOllama, type OllamaMessage } from './services/ollama';
+import { loadChatFromBackend, saveChatToBackend } from './services/chatStorage';
+
+// 메시지 이력 저장
+let messages: OllamaMessage[] = [];
 
 // 1. 모델 경로 설정 (본인의 폴더명에 맞게 수정하세요)
 const MODEL_URL = '/huohuo/huohuo.model3.json'; 
@@ -14,22 +19,17 @@ const TARGET_MIN_FPS = 30;
 
 type ChatRole = 'user' | 'bot';
 
-const BOT_REPLIES = [
-    '좋아, 지금 분위기 정말 좋아요. 어떤 이야기부터 해볼까요?',
-    '음, 그 아이디어 괜찮다. 더 구체적으로 풀어볼까요?',
-    '알겠어. 핵심만 정리해서 바로 적용 가능한 형태로 답해볼게요.',
-    '재밌네. 이번엔 조금 다른 방식으로도 시도해볼 수 있어요.',
-    '좋아요. 지금 흐름 그대로 이어서 다음 단계로 가봅시다.'
-];
-
 function createUI(appRoot: HTMLElement) {
     appRoot.innerHTML = `
       <div class="vt-shell">
         <section id="stage" aria-label="Live2D character stage"></section>
         <aside class="chat-panel" aria-label="chat panel">
           <header class="chat-head">
-            <p class="chip">LIVE CHAT</p>
-            <h1>Huohuo Companion</h1>
+                        <div class="chat-head-row">
+                            <p class="chip">LIVE CHAT</p>
+                            <button id="chat-toggle" class="chat-toggle" type="button" aria-expanded="true" aria-controls="messages chat-form">채팅 접기</button>
+                        </div>
+                        <h1>Huohuo Companion</h1>
             <p class="sub">모델에게 말을 걸어보세요. 짧게 입력해도 자연스럽게 이어집니다.</p>
           </header>
 
@@ -44,6 +44,9 @@ function createUI(appRoot: HTMLElement) {
     `;
 
     return {
+        shellEl: appRoot.querySelector('.vt-shell') as HTMLElement,
+        chatPanelEl: appRoot.querySelector('.chat-panel') as HTMLElement,
+        toggleEl: appRoot.querySelector('#chat-toggle') as HTMLButtonElement,
         stageEl: appRoot.querySelector('#stage') as HTMLElement,
         messagesEl: appRoot.querySelector('#messages') as HTMLUListElement,
         formEl: appRoot.querySelector('#chat-form') as HTMLFormElement,
@@ -57,12 +60,15 @@ function appendMessage(messagesEl: HTMLUListElement, role: ChatRole, text: strin
     li.textContent = text;
     messagesEl.appendChild(li);
     messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    return li;
 }
 
-function setupChat(messagesEl: HTMLUListElement, formEl: HTMLFormElement, inputEl: HTMLInputElement) {
-    appendMessage(messagesEl, 'bot', '안녕! 오늘은 어떤 기능을 같이 만들어볼까?');
+async function setupChat(messagesEl: HTMLUListElement, formEl: HTMLFormElement, inputEl: HTMLInputElement) {
+    // Keep conversation memory, but start UI from a clean chat window on reload.
+    messages = await loadChatFromBackend('huohuo');
 
-    formEl.addEventListener('submit', (event) => {
+    formEl.addEventListener('submit', async (event) => {
         event.preventDefault();
         const userText = inputEl.value.trim();
         if (!userText) {
@@ -72,10 +78,46 @@ function setupChat(messagesEl: HTMLUListElement, formEl: HTMLFormElement, inputE
         appendMessage(messagesEl, 'user', userText);
         inputEl.value = '';
 
-        const reply = BOT_REPLIES[Math.floor(Math.random() * BOT_REPLIES.length)];
-        window.setTimeout(() => {
+        // 메시지 이력 업데이트
+        messages.push({
+            role: 'user',
+            content: userText,
+        });
+
+        const loadingEl = appendMessage(messagesEl, 'bot', '생각 중...');
+
+        try {
+            // 전체 이력과 함께 요청
+            const reply = await askOllama(messages);
+            loadingEl.remove();
             appendMessage(messagesEl, 'bot', reply);
-        }, 500);
+
+            messages.push({
+                role: 'assistant',
+                content: reply
+            });
+
+            try {
+                await saveChatToBackend(messages, 'huohuo');
+            } catch (saveError) {
+                console.error('대화 저장 실패:', saveError);
+                appendMessage(messagesEl, 'bot', '답변은 완료됐지만 저장에 실패했어요.');
+            }
+        } catch (error) {
+            loadingEl.remove();
+            appendMessage(messagesEl, 'bot', '죄송해요, 답변을 가져오는 데 문제가 생겼어요.');
+            console.error('Ollama API 호출 실패:', error);
+        }
+
+    });
+}
+
+function setupChatToggle(shellEl: HTMLElement, chatPanelEl: HTMLElement, toggleEl: HTMLButtonElement) {
+    toggleEl.addEventListener('click', () => {
+        const collapsed = chatPanelEl.classList.toggle('is-collapsed');
+        shellEl.classList.toggle('chat-collapsed', collapsed);
+        toggleEl.textContent = collapsed ? '채팅 펼치기' : '채팅 접기';
+        toggleEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     });
 }
 
@@ -85,8 +127,9 @@ async function init() {
         throw new Error('#app element not found');
     }
 
-    const { stageEl, messagesEl, formEl, inputEl } = createUI(appRoot);
-    setupChat(messagesEl, formEl, inputEl);
+    const { shellEl, chatPanelEl, toggleEl, stageEl, messagesEl, formEl, inputEl } = createUI(appRoot);
+    setupChatToggle(shellEl, chatPanelEl, toggleEl);
+    await setupChat(messagesEl, formEl, inputEl);
 
     // 2. PixiJS 앱 생성
     const app = new PIXI.Application({
