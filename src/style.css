@@ -28,6 +28,7 @@ body {
 body {
   font-family: 'SUIT Variable', 'Pretendard', 'Noto Sans KR', sans-serif;
   color: var(--ink);
+  overflow: hidden;
   background:
     radial-gradient(circle at 12% 10%, rgba(255, 255, 255, 0.9), transparent 40%),
     radial-gradient(circle at 84% 92%, rgba(255, 231, 196, 0.8), transparent 35%),
@@ -36,7 +37,7 @@ body {
 
 #app {
   width: min(1280px, 100%);
-  min-height: 100svh;
+  height: 100svh;
   margin: 0 auto;
   padding: 20px;
 }
@@ -45,7 +46,7 @@ body {
   display: grid;
   grid-template-columns: 1.3fr 0.95fr;
   gap: 16px;
-  min-height: calc(100svh - 40px);
+  height: 100%;
 }
 
 .vt-shell.chat-collapsed {
@@ -88,7 +89,9 @@ body {
   backdrop-filter: blur(7px);
   box-shadow: var(--shadow);
   padding: 24px;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   animation: panel-rise 600ms ease both;
 }
 
@@ -147,7 +150,9 @@ body {
   flex-direction: column;
   gap: 10px;
   flex: 1;
+  min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .message {
@@ -265,7 +270,7 @@ body {
 
   .vt-shell {
     grid-template-columns: 1fr;
-    min-height: calc(100svh - 20px);
+    height: 100%;
   }
 
   .vt-shell.chat-collapsed {
@@ -277,7 +282,7 @@ body {
   }
 
   .chat-panel {
-    min-height: 42svh;
+    min-height: 0;
     padding: 18px;
   }
 }

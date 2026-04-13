@@ -18,6 +18,101 @@ const TARGET_MIN_FPS = 30;
 (window as any).PIXI = PIXI;
 
 type ChatRole = 'user' | 'bot';
+type Emotion = 'happy' | 'curious' | 'sad' | 'angry' | 'surprised' | 'neutral';
+
+const EMOTION_KEYWORDS: Record<Emotion, RegExp> = {
+    happy: /(좋|고마|축하|행복|기쁘|최고|love|great|awesome|nice|thanks)/i,
+    curious: /(궁금|왜|어떻게|설명|질문|what|how|why|\?)/i,
+    sad: /(슬프|우울|눈물|힘들|미안|sorry|sad|depress|cry)/i,
+    angry: /(화나|짜증|열받|분노|angry|mad|annoy)/i,
+    surprised: /(헉|와|놀라|대박|진짜|omg|wow|surpris)/i,
+    neutral: /$^/
+};
+
+function detectEmotion(text: string): Emotion {
+    if (EMOTION_KEYWORDS.angry.test(text)) return 'angry';
+    if (EMOTION_KEYWORDS.sad.test(text)) return 'sad';
+    if (EMOTION_KEYWORDS.surprised.test(text)) return 'surprised';
+    if (EMOTION_KEYWORDS.happy.test(text)) return 'happy';
+    if (EMOTION_KEYWORDS.curious.test(text)) return 'curious';
+    return 'neutral';
+}
+
+function animateReaction(model: Live2DModel, baseScale: number, emotion: Emotion) {
+    const durationMs = 520;
+    const start = performance.now();
+    const initialRotation = model.rotation;
+    const ampByEmotion: Record<Emotion, number> = {
+        happy: 0.06,
+        curious: 0.04,
+        sad: 0.025,
+        angry: 0.08,
+        surprised: 0.1,
+        neutral: 0.03,
+    };
+    const scaleBoostByEmotion: Record<Emotion, number> = {
+        happy: 0.05,
+        curious: 0.03,
+        sad: -0.01,
+        angry: 0.04,
+        surprised: 0.07,
+        neutral: 0.02,
+    };
+
+    const amplitude = ampByEmotion[emotion];
+    const scaleBoost = scaleBoostByEmotion[emotion];
+
+    const tick = (now: number) => {
+        const t = Math.min((now - start) / durationMs, 1);
+        const easeOut = 1 - Math.pow(1 - t, 3);
+        const swing = Math.sin(t * Math.PI * 2.4) * (1 - easeOut);
+
+        model.rotation = initialRotation + swing * amplitude;
+        model.scale.set(baseScale * (1 + scaleBoost * (1 - easeOut)));
+
+        if (t < 1) {
+            requestAnimationFrame(tick);
+        } else {
+            model.rotation = initialRotation;
+            model.scale.set(baseScale);
+        }
+    };
+
+    requestAnimationFrame(tick);
+}
+
+async function triggerModelReaction(model: Live2DModel, baseScale: number, reply: string) {
+    const emotion = detectEmotion(reply);
+    const expressionByEmotion: Partial<Record<Emotion, string>> = {
+        angry: 'angry',
+        sad: 'cry',
+        surprised: 'baozhen',
+    };
+    const motionByEmotion: Partial<Record<Emotion, string>> = {
+        happy: 'qizi',
+        curious: 'haoqi',
+        sad: 'keshui',
+        angry: 'zhentou',
+        surprised: 'yaotou',
+    };
+
+    try {
+        const expressionId = expressionByEmotion[emotion];
+        if (expressionId) {
+            await model.expression(expressionId);
+        }
+
+        const motionGroup = motionByEmotion[emotion];
+        if (motionGroup) {
+            await model.motion(motionGroup);
+        }
+    } catch (reactionError) {
+        console.debug('Live2D expression/motion trigger skipped:', reactionError);
+    }
+
+    // Fallback visual reaction so the model always feels responsive.
+    animateReaction(model, baseScale, emotion);
+}
 
 function createUI(appRoot: HTMLElement) {
     appRoot.innerHTML = `
@@ -64,7 +159,12 @@ function appendMessage(messagesEl: HTMLUListElement, role: ChatRole, text: strin
     return li;
 }
 
-async function setupChat(messagesEl: HTMLUListElement, formEl: HTMLFormElement, inputEl: HTMLInputElement) {
+async function setupChat(
+    messagesEl: HTMLUListElement,
+    formEl: HTMLFormElement,
+    inputEl: HTMLInputElement,
+    onAssistantReply?: (reply: string) => void | Promise<void>
+) {
     // Keep conversation memory, but start UI from a clean chat window on reload.
     messages = await loadChatFromBackend('huohuo');
 
@@ -91,6 +191,10 @@ async function setupChat(messagesEl: HTMLUListElement, formEl: HTMLFormElement, 
             const reply = await askOllama(messages);
             loadingEl.remove();
             appendMessage(messagesEl, 'bot', reply);
+
+            if (onAssistantReply) {
+                await onAssistantReply(reply);
+            }
 
             messages.push({
                 role: 'assistant',
@@ -129,7 +233,10 @@ async function init() {
 
     const { shellEl, chatPanelEl, toggleEl, stageEl, messagesEl, formEl, inputEl } = createUI(appRoot);
     setupChatToggle(shellEl, chatPanelEl, toggleEl);
-    await setupChat(messagesEl, formEl, inputEl);
+    let onAssistantReply: (reply: string) => void | Promise<void> = () => {};
+    await setupChat(messagesEl, formEl, inputEl, async (reply) => {
+        await onAssistantReply(reply);
+    });
 
     // 2. PixiJS 앱 생성
     const app = new PIXI.Application({
@@ -153,6 +260,7 @@ async function init() {
         // 3. Live2D 모델 로드
         const model = await Live2DModel.from(MODEL_URL);
         app.stage.addChild(model);
+        let baseModelScale = 1;
 
         // 4. 모델 위치 및 크기 조절
         model.anchor.set(0.5, 0.5);
@@ -165,6 +273,7 @@ async function init() {
             const sx = width / model.width;
             const sy = height / model.height;
             const scale = Math.min(sx, sy) * 1;
+            baseModelScale = scale;
             model.scale.set(scale);
         };
 
@@ -178,6 +287,10 @@ async function init() {
 
             model.focus(interaction.mouse.global.x, interaction.mouse.global.y);
         });
+
+        onAssistantReply = async (reply) => {
+            await triggerModelReaction(model, baseModelScale, reply);
+        };
 
         console.log('캐릭터 로드 완료!');
 
