@@ -4,7 +4,9 @@ import { Live2DModel } from 'pixi-live2d-display/cubism4';
 import { askOllama, type OllamaMessage } from './services/ollama';
 import { loadChatFromBackend, saveChatToBackend } from './services/chatStorage';
 
-// 메시지 이력 저장
+// 메모리 상 대화 이력입니다.
+// 1) LLM 호출 시 대화 문맥으로 사용
+// 2) 매 응답 후 백엔드 파일 저장 시 사용
 let messages: OllamaMessage[] = [];
 
 // 1. 모델 경로 설정 (본인의 폴더명에 맞게 수정하세요)
@@ -22,6 +24,7 @@ type Emotion = 'happy' | 'curious' | 'sad' | 'angry' | 'surprised' | 'neutral';
 type ShotMode = 'full' | 'upper';
 const EMOTION_TAGS: Emotion[] = ['happy', 'curious', 'sad', 'angry', 'surprised', 'neutral'];
 
+// 반응/대기모션/시선 동작에 대한 시간 및 강도 설정값
 const REACTION_RESET_MS = 2600;
 const IDLE_MIN_INTERVAL_MS = 9000;
 const IDLE_MAX_INTERVAL_MS = 16000;
@@ -47,14 +50,18 @@ let lastIdleMotionGroup = 'idle';
 let nextWanderAt = Date.now() + 12000;
 let wanderUntil = 0;
 
+// [min, max] 범위의 정수 난수 반환
 function randomInt(min: number, max: number): number {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// 다음 두리번(짧은 시선 이동) 시작 시점을 예약
 function scheduleNextWander(baseTimeMs: number) {
     nextWanderAt = baseTimeMs + randomInt(WANDER_MIN_INTERVAL_MS, WANDER_MAX_INTERVAL_MS);
 }
 
+// Live2D 내부 좌표계(-1 ~ 1)로 시선 적용
+// 화면 픽셀 좌표를 직접 쓰지 않아 모델별 중심 오차를 줄일 수 있습니다.
 function setModelGaze(model: Live2DModel, x: number, y: number, instant = false) {
     const controller = (model as any).internalModel?.focusController;
     if (controller?.focus) {
@@ -62,11 +69,14 @@ function setModelGaze(model: Live2DModel, x: number, y: number, instant = false)
     }
 }
 
+// 새 모션 시작 전에 현재 모션 큐를 정리합니다.
+// 모션 겹침(손/소품 잔상) 현상을 줄이는 목적입니다.
 function stopAllModelMotions(model: Live2DModel) {
     const motionManager = (model as any).internalModel?.motionManager;
     motionManager?.stopAllMotions?.();
 }
 
+// 감정 태그가 없을 때 사용하는 키워드 기반 보조 감정 추론
 const EMOTION_KEYWORDS: Record<Emotion, RegExp> = {
     happy: /(좋|고마|축하|행복|기쁘|최고|love|great|awesome|nice|thanks|웃)/i,
     curious: /(궁금|왜|어떻게|설명|질문|알려|what|how|why|explain|tell me)/i,
@@ -85,6 +95,7 @@ const USER_EMOTION_COMMANDS: Record<Emotion, RegExp> = {
     neutral: /(무표정|기본표정|neutral)/i,
 };
 
+// 간단한 텍스트 감정 분류기(우선순위 순서대로 검사)
 function detectEmotion(text: string): Emotion {
     if (EMOTION_KEYWORDS.angry.test(text)) return 'angry';
     if (EMOTION_KEYWORDS.sad.test(text)) return 'sad';
@@ -94,6 +105,8 @@ function detectEmotion(text: string): Emotion {
     return 'neutral';
 }
 
+// "화난표정", "슬픈표정" 같은 사용자 명령형 감정을 감지합니다.
+// 감지되면 이 감정이 최우선으로 적용됩니다.
 function detectForcedEmotionFromUserText(text: string): Emotion | null {
     for (const emotion of EMOTION_TAGS) {
         if (USER_EMOTION_COMMANDS[emotion].test(text)) {
@@ -103,8 +116,10 @@ function detectForcedEmotionFromUserText(text: string): Emotion | null {
     return null;
 }
 
+// LLM 응답 문자열에서 감정 태그를 파싱합니다.
+// 예: "(happy) 오늘 정말 좋아요" -> emotion=happy, visibleReply="오늘 정말 좋아요"
 function parseEmotionTaggedReply(rawReply: string): { emotion: Emotion | null; visibleReply: string } {
-    const match = rawReply.match(/^\s*\((happy|curious|sad|angry|surprised|neutral)\)\s*/i);
+    const match = rawReply.match(/[\(\（](happy|curious|sad|angry|surprised|neutral)[\)\）]/i);
     if (!match) {
         return { emotion: null, visibleReply: rawReply.trim() };
     }
@@ -117,6 +132,8 @@ function parseEmotionTaggedReply(rawReply: string): { emotion: Emotion | null; v
     };
 }
 
+// 표정/모션 적용이 실패해도 최소한 반응이 보이도록
+// 회전/스케일/위치 펄스 애니메이션을 실행합니다.
 function animateReaction(model: Live2DModel, baseScale: number, emotion: Emotion) {
     const durationMs = 700;
     const start = performance.now();
@@ -176,6 +193,8 @@ function animateReaction(model: Live2DModel, baseScale: number, emotion: Emotion
     requestAnimationFrame(tick);
 }
 
+// 감정 반응 후 일정 시간이 지나면 기본 상태로 복귀시킵니다.
+// 강한 표정/모션이 오래 고정되는 것을 방지합니다.
 function scheduleReturnToDefault(model: Live2DModel) {
     if (resetToDefaultTimer !== null) {
         window.clearTimeout(resetToDefaultTimer);
@@ -194,6 +213,9 @@ function scheduleReturnToDefault(model: Live2DModel) {
     }, REACTION_RESET_MS);
 }
 
+// 백그라운드 대기모션 스케줄러
+// 유저 입력/감정 반응 직후에는 잠시 차단하고,
+// 그 외 시간에는 랜덤 간격으로 대기모션을 실행합니다.
 function startIdleMotionLoop(model: Live2DModel) {
     const scheduleNext = () => {
         const delay = Math.floor(Math.random() * (IDLE_MAX_INTERVAL_MS - IDLE_MIN_INTERVAL_MS + 1)) + IDLE_MIN_INTERVAL_MS;
@@ -227,6 +249,11 @@ function startIdleMotionLoop(model: Live2DModel) {
     scheduleNext();
 }
 
+// 감정 반응 핵심 파이프라인
+// 1) 감정 결정(사용자 명령 > 태그 감정 > 문맥 추론)
+// 2) 표정 + 모션 적용
+// 3) 보조 시각 반응(펄스) 실행
+// 4) 기본 상태 복귀 타이머 예약
 async function triggerModelReaction(
     model: Live2DModel,
     baseScale: number,
@@ -236,7 +263,8 @@ async function triggerModelReaction(
 ) {
     const forcedByUserCommand = detectForcedEmotionFromUserText(userText);
     const inferredEmotion = detectEmotion(`${userText} ${reply}`);
-    const emotion = forcedByUserCommand ?? forcedEmotion ?? inferredEmotion;
+    const taggedEmotion = forcedEmotion && forcedEmotion !== 'neutral' ? forcedEmotion : null;
+    const emotion = forcedByUserCommand ?? taggedEmotion ?? inferredEmotion;
 
     const now = Date.now();
     if (now - lastReactionAt < 450) {
@@ -271,6 +299,7 @@ async function triggerModelReaction(
         const shouldPlayMotion = emotion !== 'neutral';
         if (motionGroup && shouldPlayMotion) {
             await model.motion(motionGroup);
+            lastIdleMotionGroup = motionGroup;
         }
     } catch (reactionError) {
         console.debug('Live2D expression/motion trigger skipped:', reactionError);
@@ -283,6 +312,7 @@ async function triggerModelReaction(
     scheduleReturnToDefault(model);
 }
 
+// 앱 레이아웃(무대 + 채팅 패널)을 문자열 템플릿으로 생성합니다.
 function createUI(appRoot: HTMLElement) {
     appRoot.innerHTML = `
       <div class="vt-shell">
@@ -323,6 +353,7 @@ function createUI(appRoot: HTMLElement) {
     };
 }
 
+// 채팅 말풍선 1개를 렌더링하고, 항상 최신 메시지가 보이도록 스크롤을 하단으로 이동합니다.
 function appendMessage(messagesEl: HTMLUListElement, role: ChatRole, text: string) {
     const li = document.createElement('li');
     li.className = `message ${role}`;
@@ -333,13 +364,19 @@ function appendMessage(messagesEl: HTMLUListElement, role: ChatRole, text: strin
     return li;
 }
 
+// 채팅 흐름 초기화
+// - 저장된 이력 로드(메모리)
+// - submit 이벤트 처리
+// - LLM 호출
+// - 감정 태그 파싱
+// - 화면 렌더 + 저장
 async function setupChat(
     messagesEl: HTMLUListElement,
     formEl: HTMLFormElement,
     inputEl: HTMLInputElement,
     onAssistantReply?: (args: { userText: string; reply: string; emotion: Emotion | null }) => void | Promise<void>
 ) {
-    // Keep conversation memory, but start UI from a clean chat window on reload.
+    // 새로고침 시 화면은 비워 시작하되, 대화 메모리는 로드해서 LLM 문맥으로 사용합니다.
     messages = await loadChatFromBackend('huohuo');
 
     formEl.addEventListener('submit', async (event) => {
@@ -394,6 +431,7 @@ async function setupChat(
     });
 }
 
+// 우측 채팅 패널 접기/펼치기 토글
 function setupChatToggle(shellEl: HTMLElement, chatPanelEl: HTMLElement, toggleEl: HTMLButtonElement) {
     toggleEl.addEventListener('click', () => {
         const collapsed = chatPanelEl.classList.toggle('is-collapsed');
@@ -403,6 +441,11 @@ function setupChatToggle(shellEl: HTMLElement, chatPanelEl: HTMLElement, toggleE
     });
 }
 
+// 앱 부트스트랩(시작 진입점)
+// 1) UI 생성
+// 2) 채팅 핸들러 초기화
+// 3) PIXI + Live2D 모델 초기화
+// 4) 시선/감정반응/샷전환/대기모션 연결
 async function init() {
     const appRoot = document.getElementById('app');
     if (!appRoot) {
@@ -426,7 +469,7 @@ async function init() {
         powerPreference: 'high-performance',
     });
 
-    // High refresh displays can render above 60 FPS when ticker caps are raised.
+    // 고주사율 디스플레이에서 60fps 이상 렌더링 가능하도록 티커 상한 설정
     app.ticker.maxFPS = TARGET_MAX_FPS;
     app.ticker.minFPS = TARGET_MIN_FPS;
 
@@ -444,6 +487,8 @@ async function init() {
         const modelBaseHeight = model.height;
 
         // 4. 모델 위치 및 크기 조절
+        // 로드 직후의 원본 width/height를 기준으로 계산해
+        // 샷 전환(전신/상반신) 시 스케일 누적 오류를 방지합니다.
         model.anchor.set(0.5, 0.5);
         const fitModelToScreen = () => {
             const width = stageEl.clientWidth;
@@ -470,7 +515,9 @@ async function init() {
         fitModelToScreen();
         window.addEventListener('resize', fitModelToScreen);
 
-        // Auto gaze: gently scan around without following mouse.
+        // 자동 시선 상태 머신
+        // - 대화 중: 정면 고정
+        // - 대화 외: 기본 정면 + 가끔 짧게 두리번
         app.ticker.add(() => {
             const t = performance.now() / 1000;
             const nowMs = Date.now();
@@ -502,10 +549,12 @@ async function init() {
             setModelGaze(model, FRONT_GAZE_MODEL_X, FRONT_GAZE_MODEL_Y);
         });
 
+        // 어시스턴트 응답이 오면 모델 감정 반응을 실행합니다.
         onAssistantReply = async ({ userText, reply, emotion }) => {
             await triggerModelReaction(model, baseModelScale, userText, reply, emotion);
         };
 
+        // 주기적 대기모션 루프 시작
         startIdleMotionLoop(model);
 
         console.log('캐릭터 로드 완료!');
