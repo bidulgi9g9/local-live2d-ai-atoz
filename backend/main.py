@@ -151,6 +151,8 @@ async def save_message(data: dict):
             "INSERT INTO messages(role, content, timestamp) VALUES(?, ?, ?)",
             (role, content, timestamp),
         )
+        if cursor.lastrowid is None:
+            return {"status": "error", "message": "메시지 저장 ID 생성 실패"}
         message_id = int(cursor.lastrowid)
         upsert_message_topics(conn, message_id, topics)
 
@@ -189,8 +191,7 @@ async def search_memory(query: str, limit: int = 10):
             GROUP BY m.id
             ORDER BY m.timestamp DESC
             LIMIT ?
-            """
-            ,
+            """,
             (MAX_SEARCH_CANDIDATES,),
         ).fetchall()
 
