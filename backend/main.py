@@ -107,6 +107,28 @@ def upsert_message_topics(conn: sqlite3.Connection, message_id: int, topics: lis
     )
 
 
+def normalize_iso_timestamp(value: str | None) -> str:
+    if not value:
+        return datetime.now(timezone.utc).isoformat()
+
+    normalized = value.strip()
+    if not normalized:
+        return datetime.now(timezone.utc).isoformat()
+
+    parse_target = normalized.replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(parse_target)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
+
+
+def parse_timestamp_for_sort(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
 def score_memory(query: str, query_tokens: set[str], query_topics: set[str], memory: dict[str, Any]) -> float:
     content = memory["content"]
     content_tokens = tokenize(content)
@@ -136,7 +158,10 @@ async def save_message(data: dict):
     """메시지 저장 + 주제 태그 자동 분류"""
     role = data.get("role")
     content = (data.get("content") or "").strip()
-    timestamp = data.get("timestamp") or datetime.now(timezone.utc).isoformat()
+    try:
+        timestamp = normalize_iso_timestamp(data.get("timestamp"))
+    except ValueError:
+        return {"status": "error", "message": "timestamp는 ISO 8601 형식이어야 합니다."}
 
     if role not in VALID_ROLES:
         return {"status": "error", "message": "role은 user 또는 assistant 여야 합니다."}
@@ -210,7 +235,10 @@ async def search_memory(query: str, limit: int = 10):
             memory["score"] = score
             scored_memories.append(memory)
 
-    scored_memories.sort(key=lambda item: (item["score"], item["timestamp"]), reverse=True)
+    scored_memories.sort(
+        key=lambda item: (item["score"], parse_timestamp_for_sort(item["timestamp"])),
+        reverse=True,
+    )
 
     return {
         "memories": scored_memories[:safe_limit],
