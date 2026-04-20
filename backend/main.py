@@ -29,6 +29,12 @@ CHAT_DIR.mkdir(parents=True, exist_ok=True)
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "memory.db"
 
+VALID_ROLES = ("user", "assistant")
+VALID_ROLES_SQL = ", ".join(f"'{role}'" for role in VALID_ROLES)
+TOPIC_OVERLAP_WEIGHT = 2
+EXACT_MATCH_BONUS = 2
+MAX_SEARCH_CANDIDATES = 1000
+
 TOKEN_RE = re.compile(r"[A-Za-z0-9가-힣]+")
 TOPIC_KEYWORDS: dict[str, list[str]] = {
     "날씨": ["날씨", "비", "눈", "기온", "온도", "봄", "여름", "가을", "겨울"],
@@ -49,10 +55,10 @@ def get_db_connection() -> sqlite3.Connection:
 def init_db() -> None:
     with get_db_connection() as conn:
         conn.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                role TEXT NOT NULL CHECK(role IN ({VALID_ROLES_SQL})),
                 content TEXT NOT NULL,
                 timestamp TEXT NOT NULL
             )
@@ -109,9 +115,9 @@ def score_memory(query: str, query_tokens: set[str], query_topics: set[str], mem
     token_overlap = len(query_tokens & content_tokens)
     topic_overlap = len(query_topics & memory_topics)
 
-    score = float(token_overlap + (topic_overlap * 2))
+    score = float(token_overlap + (topic_overlap * TOPIC_OVERLAP_WEIGHT))
     if query.lower() in content.lower():
-        score += 2
+        score += EXACT_MATCH_BONUS
 
     return score
 
@@ -132,7 +138,7 @@ async def save_message(data: dict):
     content = (data.get("content") or "").strip()
     timestamp = data.get("timestamp") or datetime.now(timezone.utc).isoformat()
 
-    if role not in {"user", "assistant"}:
+    if role not in VALID_ROLES:
         return {"status": "error", "message": "role은 user 또는 assistant 여야 합니다."}
 
     if not content:
@@ -182,8 +188,10 @@ async def search_memory(query: str, limit: int = 10):
             LEFT JOIN message_topics mt ON mt.message_id = m.id
             GROUP BY m.id
             ORDER BY m.timestamp DESC
-            LIMIT 1000
+            LIMIT ?
             """
+            ,
+            (MAX_SEARCH_CANDIDATES,),
         ).fetchall()
 
     scored_memories: list[dict[str, Any]] = []

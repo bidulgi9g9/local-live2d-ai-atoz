@@ -40,6 +40,7 @@ const WANDER_MIN_INTERVAL_MS = 10000;
 const WANDER_MAX_INTERVAL_MS = 18000;
 const WANDER_MIN_DURATION_MS = 1800;
 const WANDER_MAX_DURATION_MS = 3200;
+const FALLBACK_CONTEXT_SIZE = 6;
 
 let lastReactionAt = 0;
 let lastUserInteractionAt = 0;
@@ -404,7 +405,7 @@ async function setupChat(
             const relatedMemories = await searchRelevantMemories(userText, 10);
             const contextMessages = relatedMemories.length > 0
                 ? buildMemoryContext(userText, relatedMemories)
-                : messages.slice(-6);
+                : messages.slice(-FALLBACK_CONTEXT_SIZE);
             const rawReply = await askOllama(contextMessages);
             const { emotion, visibleReply } = parseEmotionTaggedReply(rawReply);
             loadingEl.remove();
