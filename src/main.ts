@@ -2,11 +2,11 @@ import './style.css';
 import * as PIXI from 'pixi.js';
 import { Live2DModel } from 'pixi-live2d-display/cubism4';
 import { askOllama, type OllamaMessage } from './services/ollama';
-import { loadChatFromBackend, saveChatToBackend } from './services/chatStorage';
+import { buildMemoryContext, saveMessageToMemory, searchRelevantMemories } from './services/smartMemory';
 
 // 메모리 상 대화 이력입니다.
-// 1) LLM 호출 시 대화 문맥으로 사용
-// 2) 매 응답 후 백엔드 파일 저장 시 사용
+// 1) UI 렌더 및 현재 세션 추적
+// 2) 관련 메모리 검색 실패 시 최소 문맥 폴백
 let messages: OllamaMessage[] = [];
 
 // 1. 모델 경로 설정 (본인의 폴더명에 맞게 수정하세요)
@@ -376,8 +376,8 @@ async function setupChat(
     inputEl: HTMLInputElement,
     onAssistantReply?: (args: { userText: string; reply: string; emotion: Emotion | null }) => void | Promise<void>
 ) {
-    // 새로고침 시 화면은 비워 시작하되, 대화 메모리는 로드해서 LLM 문맥으로 사용합니다.
-    messages = await loadChatFromBackend('huohuo');
+    // 새로고침 시 화면은 비워 시작합니다.
+    messages = [];
 
     formEl.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -400,8 +400,12 @@ async function setupChat(
         const loadingEl = appendMessage(messagesEl, 'bot', '생각 중...');
 
         try {
-            // 전체 이력과 함께 요청
-            const rawReply = await askOllama(messages);
+            // 사용자 입력과 관련된 메모리만 검색해 문맥으로 사용합니다.
+            const relatedMemories = await searchRelevantMemories(userText, 10);
+            const contextMessages = relatedMemories.length > 0
+                ? buildMemoryContext(userText, relatedMemories)
+                : messages.slice(-6);
+            const rawReply = await askOllama(contextMessages);
             const { emotion, visibleReply } = parseEmotionTaggedReply(rawReply);
             loadingEl.remove();
             appendMessage(messagesEl, 'bot', visibleReply);
@@ -417,7 +421,8 @@ async function setupChat(
             });
 
             try {
-                await saveChatToBackend(messages, 'huohuo');
+                await saveMessageToMemory({ role: 'user', content: userText });
+                await saveMessageToMemory({ role: 'assistant', content: visibleReply });
             } catch (saveError) {
                 console.error('대화 저장 실패:', saveError);
                 appendMessage(messagesEl, 'bot', '답변은 완료됐지만 저장에 실패했어요.');
