@@ -2,7 +2,8 @@ import './style.css';
 import * as PIXI from 'pixi.js';
 import { Live2DModel } from 'pixi-live2d-display/cubism4';
 import { askOllama, type OllamaMessage } from './services/ollama';
-import { buildMemoryContext, saveMessageToMemory, searchRelevantMemories } from './services/smartMemory';
+import { buildMemoryContext, getRecentMessages, saveMessageToMemory, searchRelevantMemories } from './services/smartMemory';
+import { analyzeEmotionWithKoBERT, type Emotion as KoBERTEmotion } from './services/emotionAnalysis'; 
 
 // 메모리 상 대화 이력입니다.
 // 1) UI 렌더 및 현재 세션 추적
@@ -20,7 +21,7 @@ const TARGET_MIN_FPS = 30;
 (window as any).PIXI = PIXI;
 
 type ChatRole = 'user' | 'bot';
-type Emotion = 'happy' | 'curious' | 'sad' | 'angry' | 'surprised' | 'neutral';
+type Emotion = KoBERTEmotion;
 type ShotMode = 'full' | 'upper';
 const EMOTION_TAGS: Emotion[] = ['happy', 'curious', 'sad', 'angry', 'surprised', 'neutral'];
 
@@ -263,9 +264,14 @@ async function triggerModelReaction(
     forcedEmotion?: Emotion | null
 ) {
     const forcedByUserCommand = detectForcedEmotionFromUserText(userText);
-    const inferredEmotion = detectEmotion(`${userText} ${reply}`);
     const taggedEmotion = forcedEmotion && forcedEmotion !== 'neutral' ? forcedEmotion : null;
-    const emotion = forcedByUserCommand ?? taggedEmotion ?? inferredEmotion;
+    const kobertResult = await analyzeEmotionWithKoBERT(`${userText}\n${reply}`);
+    const kobertEmotion: Emotion | null = kobertResult ? kobertResult.emotion : null;
+    const inferredEmotion = detectEmotion(`${userText} ${reply}`);
+    const emotion = forcedByUserCommand
+        ?? kobertEmotion
+        ?? taggedEmotion
+        ?? inferredEmotion;
 
     const now = Date.now();
     if (now - lastReactionAt < 450) {
@@ -274,18 +280,18 @@ async function triggerModelReaction(
     lastReactionAt = now;
 
     const expressionByEmotion: Partial<Record<Emotion, string>> = {
-        happy: 'qizi1',
+        happy: 'baozhen',
         curious: 'qizi2',
         angry: 'angry',
         sad: 'cry',
-        surprised: 'baozhen',
+        surprised: 'white eyes',
     };
     const motionByEmotion: Partial<Record<Emotion, string>> = {
-        happy: 'linghun',
+        happy: 'zhentou',
         curious: 'haoqi',
-        sad: 'keshui',
+        sad: 'yaotou',
         angry: 'zhentou',
-        surprised: 'yaotou',
+        surprised: 'keshui',
     };
 
     try {
@@ -306,7 +312,14 @@ async function triggerModelReaction(
         console.debug('Live2D expression/motion trigger skipped:', reactionError);
     }
 
-    console.log('[reaction]', { emotion, forcedByUserCommand, forcedEmotion, inferredEmotion });
+    console.log('[reaction]', {
+        emotion,
+        forcedByUserCommand,
+        forcedEmotion,
+        kobertEmotion,
+        kobertConfidence: kobertResult?.confidence,
+        inferredEmotion,
+    });
 
     // Fallback visual reaction so the model always feels responsive.
     animateReaction(model, baseScale, emotion);
@@ -377,8 +390,18 @@ async function setupChat(
     inputEl: HTMLInputElement,
     onAssistantReply?: (args: { userText: string; reply: string; emotion: Emotion | null }) => void | Promise<void>
 ) {
-    // 새로고침 시 화면은 비워 시작합니다.
+    // 앱 시작 시 DB의 최근 대화를 불러와 화면과 메모리 이력을 복원합니다.
     messages = [];
+    try {
+        const recentMessages = await getRecentMessages(40);
+        for (const message of recentMessages) {
+            const role: ChatRole = message.role === 'assistant' ? 'bot' : 'user';
+            appendMessage(messagesEl, role, message.content);
+            messages.push({ role: message.role, content: message.content });
+        }
+    } catch (error) {
+        console.warn('최근 대화 복원 실패:', error);
+    }
 
     formEl.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -422,6 +445,7 @@ async function setupChat(
             });
 
             try {
+                // 사용자 메시지와 봇 답변을 각각 저장해서 다음 검색 때 재사용합니다.
                 await saveMessageToMemory({ role: 'user', content: userText });
                 await saveMessageToMemory({ role: 'assistant', content: visibleReply });
             } catch (saveError) {

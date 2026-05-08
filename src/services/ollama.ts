@@ -27,14 +27,11 @@ export async function askOllama(chatHistory: OllamaMessage[]): Promise<string> {
   try {
     // 모델이 항상 감정 태그를 붙여 답하도록 시스템 프롬프트를 강제합니다.
     const systemPrompt = [
-      'You are a Live2D chat assistant.',
-      'Every response MUST start with exactly one leading emotion tag from this list only:',
-      '(happy) (curious) (sad) (angry) (surprised) (neutral).',
-      'Format: (emotion) your reply text',
-      'Choose the most fitting emotion from context. Do not overuse (neutral).',
-      'Use (neutral) only when no clear emotional tone exists.',
-      'Do not use any other tag name.',
-      'Do not output more than one leading tag.'
+      'You are a helpful Live2D chat assistant.',
+      'Respond naturally and conversationally in Korean.',
+      'Do not include any emotion tags or special markers.',
+      'Just provide a natural, friendly response.',
+      'Keep responses concise but warm.'
     ].join(' ');
 
     // 요청 메시지의 맨 앞에 system 프롬프트를 삽입하고
